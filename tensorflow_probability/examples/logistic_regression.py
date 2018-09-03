@@ -162,60 +162,74 @@ def main(argv):
   # Generate (and visualize) a toy classification dataset.
   w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
 
-  with tf.Graph().as_default():
-    inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
+  for iter in range(3):
+    with tf.Graph().as_default():
+      inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-    # Define a logistic regression model as a Bernoulli distribution
-    # parameterized by logits from a single linear layer. We use the Flipout
-    # Monte Carlo estimator for the layer: this enables lower variance
-    # stochastic gradients than naive reparameterization.
-    with tf.name_scope("logistic_regression", values=[inputs]):
-      layer = tfp.layers.DenseFlipout(
-          units=1,
-          activation=None,
-          kernel_posterior_fn=tfp.layers.default_mean_field_normal_fn(),
-          bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
-      logits = layer(inputs)
-      labels_distribution = tfd.Bernoulli(logits=logits)
+      # Define a logistic regression model as a Bernoulli distribution
+      # parameterized by logits from a single linear layer. We use the Flipout
+      # Monte Carlo estimator for the layer: this enables lower variance
+      # stochastic gradients than naive reparameterization.
+      with tf.name_scope("logistic_regression", values=[inputs]):
+        layer = tfp.layers.DenseFlipout(
+            units=1,
+            activation=None,
+            kernel_posterior_fn=tfp.layers.default_mean_field_normal_fn(),
+            bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
+        logits = layer(inputs)
+        labels_distribution = tfd.Bernoulli(logits=logits)
 
-    # Compute the -ELBO as the loss, averaged over the batch size.
-    neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
-    kl = sum(layer.losses) / FLAGS.num_examples
-    elbo_loss = neg_log_likelihood + kl
+      # Compute the -ELBO as the loss, averaged over the batch size.
+      #neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
+      #kl = sum(layer.losses) / FLAGS.num_examples
+      #elbo_loss = neg_log_likelihood + kl
 
-    # Build metrics for evaluation. Predictions are formed from a single forward
-    # pass of the probabilistic layers. They are cheap but noisy predictions.
-    predictions = tf.cast(logits > 0, dtype=tf.int32)
-    accuracy, accuracy_update_op = tf.metrics.accuracy(
-        labels=labels, predictions=predictions)
+      # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
+      f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+      klqp_vimco = tfp.vi.csiszar_vimco(
+          f=f,
+          p_log_prob=p.log_prob,
+          q=q,
+          num_draws=num_draws,
+          num_batch_draws=num_batch_draws,
+          seed=seed)
 
-    with tf.name_scope("train"):
-      opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
+      #relbo_loss = elbo_loss + tf.reduce_mean()
 
-      train_op = opt.minimize(elbo_loss)
-      with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        sess.run(tf.local_variables_initializer())
+      # Build metrics for evaluation. Predictions are formed from a single forward
+      # pass of the probabilistic layers. They are cheap but noisy predictions.
+      predictions = tf.cast(logits > 0, dtype=tf.int32)
+      accuracy, accuracy_update_op = tf.metrics.accuracy(
+          labels=labels, predictions=predictions)
 
-        # Fit the model to data.
-        for step in range(FLAGS.max_steps):
-          _ = sess.run([train_op, accuracy_update_op])
-          if step % 100 == 0:
-            loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
-            print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
-                step, loss_value, accuracy_value))
+      with tf.name_scope("train"):
+        opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
 
-        # Visualize some draws from the weights posterior.
-        w_draw = layer.kernel_posterior.sample()
-        b_draw = layer.bias_posterior.sample()
-        candidate_w_bs = []
-        for _ in range(FLAGS.num_monte_carlo):
-          w, b = sess.run((w_draw, b_draw))
-          candidate_w_bs.append((w, b))
-        visualize_decision(x, y, (w_true, b_true),
-                           candidate_w_bs,
-                           fname=os.path.join(FLAGS.model_dir,
-                                              "weights_inferred.png"))
+        train_op = opt.minimize(elbo_loss)
+        with tf.Session() as sess:
+          sess.run(tf.global_variables_initializer())
+          sess.run(tf.local_variables_initializer())
+
+          # Fit the model to data.
+          for step in range(FLAGS.max_steps):
+            _ = sess.run([train_op, accuracy_update_op])
+            if step % 100 == 0:
+              loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+              print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+                  step, loss_value, accuracy_value))
+
+          # Visualize some draws from the weights posterior.
+          if False:
+            w_draw = layer.kernel_posterior.sample()
+            b_draw = layer.bias_posterior.sample()
+            candidate_w_bs = []
+            for _ in range(FLAGS.num_monte_carlo):
+              w, b = sess.run((w_draw, b_draw))
+              candidate_w_bs.append((w, b))
+            visualize_decision(x, y, (w_true, b_true),
+                              candidate_w_bs,
+                              fname=os.path.join(FLAGS.model_dir,
+                                                  "weights_inferred.png"))
 
 if __name__ == "__main__":
   tf.app.run()
