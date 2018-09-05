@@ -170,14 +170,20 @@ def main(argv):
       # parameterized by logits from a single linear layer. We use the Flipout
       # Monte Carlo estimator for the layer: this enables lower variance
       # stochastic gradients than naive reparameterization.
+
       with tf.name_scope("logistic_regression", values=[inputs]):
-        layer = tfp.layers.DenseFlipout(
-            units=1,
-            activation=None,
-            kernel_posterior_fn=tfp.layers.default_mean_field_normal_fn(),
-            bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
+        layer = tf.keras.layers.Dense(units=1, activation=None)
         logits = layer(inputs)
         labels_distribution = tfd.Bernoulli(logits=logits)
+
+      with tf.variable_scope("current_iterate"):
+        loc = tf.get_variable("loc", [2],
+                initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+
+        scale = tf.get_variable("scale", [2],
+                initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+
+        q = tfd.Normal(loc=loc, scale=scale)
 
       # Compute the -ELBO as the loss, averaged over the batch size.
       #neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
@@ -186,9 +192,12 @@ def main(argv):
 
       # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+      num_draws = 64
+      num_batch_draws = 64
+      seed = 0
       klqp_vimco = tfp.vi.csiszar_vimco(
           f=f,
-          p_log_prob=p.log_prob,
+          p_log_prob=labels_distribution.log_prob,
           q=q,
           num_draws=num_draws,
           num_batch_draws=num_batch_draws,
@@ -205,7 +214,8 @@ def main(argv):
       with tf.name_scope("train"):
         opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
 
-        train_op = opt.minimize(elbo_loss)
+        #train_op = opt.minimize(elbo_loss)
+        train_op = opt.minimize(klqp_vimco)
         with tf.Session() as sess:
           sess.run(tf.global_variables_initializer())
           sess.run(tf.local_variables_initializer())
