@@ -28,6 +28,7 @@ from matplotlib.backends import backend_agg
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow_probability import edward2 as ed
 
 tfd = tfp.distributions
 
@@ -150,6 +151,24 @@ def build_input_pipeline(x, y, batch_size):
   batch_data, batch_labels = training_iterator.get_next()
   return batch_data, batch_labels
 
+def make_value_setter(**model_kwargs):
+  """
+  Copied from: https://github.com/tensorflow/probability/blob/master/tensorflow_probability/examples/deep_exponential_family.py#L154
+  Creates a value-setting interceptor.
+  Args:
+    **model_kwargs: dict of str to Tensor. Keys are the names of random variable
+      in the model to which this interceptor is being applied. Values are
+      Tensors to set their value to.
+  Returns:
+    set_values: Function which sets the value of intercepted ops.
+  """
+  def set_values(f, *args, **kwargs):
+    """Sets random variable values to its aligned value."""
+    name = kwargs.get("name")
+    if name in model_kwargs:
+      kwargs["value"] = model_kwargs[name]
+    return ed.interceptable(f)(*args, **kwargs)
+  return set_values
 
 def main(argv):
   del argv  # unused
@@ -190,6 +209,23 @@ def main(argv):
       #kl = sum(layer.losses) / FLAGS.num_examples
       #elbo_loss = neg_log_likelihood + kl
 
+      def p_log_prob(q_samples):
+        logits = tf.matmul(q_samples, tf.transpose(inputs))
+        expected_logits = tf.reduce_mean(logits, axis=0)
+        bern = tfd.Bernoulli(logits=expected_logits, batch_size=FLAGS.batch_size)
+        logprobs = bern.log_prob(labels)
+        return logprobs
+        ret = tf.reduce_sum(logprobs)
+        return ret
+
+      with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
+
+        q_samples = q.sample(10)
+        p_log_prob(q_samples)
+
+
       # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
       num_draws = 64
@@ -197,7 +233,7 @@ def main(argv):
       seed = 0
       klqp_vimco = tfp.vi.csiszar_vimco(
           f=f,
-          p_log_prob=labels_distribution.log_prob,
+          p_log_prob=p_log_prob,
           q=q,
           num_draws=num_draws,
           num_batch_draws=num_batch_draws,
