@@ -181,6 +181,7 @@ def main(argv):
   # Generate (and visualize) a toy classification dataset.
   w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
 
+  # Run Frank-Wolfe
   for iter in range(3):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
@@ -212,9 +213,7 @@ def main(argv):
       def p_log_prob(q_samples):
         q_samples = tf.squeeze(q_samples) # TODO num_batch_draws = 1? What does this mean?
         logits = tf.matmul(q_samples, tf.transpose(inputs))
-        bern = tfd.Independent(tfd.Bernoulli(logits=logits),
-                               name="bern")
-
+        bern = tfd.Independent(tfd.Bernoulli(logits=logits), name="bern")
         logprobs = bern.log_prob(labels) # for each q sample
         return tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
 
