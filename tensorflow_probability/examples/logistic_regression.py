@@ -210,26 +210,18 @@ def main(argv):
       #elbo_loss = neg_log_likelihood + kl
 
       def p_log_prob(q_samples):
+        q_samples = tf.squeeze(q_samples) # TODO num_batch_draws = 1? What does this mean?
         logits = tf.matmul(q_samples, tf.transpose(inputs))
-        expected_logits = tf.reduce_mean(logits, axis=0)
-        bern = tfd.Bernoulli(logits=expected_logits, batch_size=FLAGS.batch_size)
-        logprobs = bern.log_prob(labels)
-        return logprobs
-        ret = tf.reduce_sum(logprobs)
-        return ret
+        bern = tfd.Independent(tfd.Bernoulli(logits=logits),
+                               name="bern")
 
-      with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        sess.run(tf.local_variables_initializer())
-
-        q_samples = q.sample(10)
-        p_log_prob(q_samples)
-
+        logprobs = bern.log_prob(labels) # for each q sample
+        return tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
 
       # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
-      num_draws = 64
-      num_batch_draws = 64
+      num_draws = 32
+      num_batch_draws = 1
       seed = 0
       klqp_vimco = tfp.vi.csiszar_vimco(
           f=f,
@@ -258,11 +250,13 @@ def main(argv):
 
           # Fit the model to data.
           for step in range(FLAGS.max_steps):
+            print(step)
             _ = sess.run([train_op, accuracy_update_op])
-            if step % 100 == 0:
-              loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
-              print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
-                  step, loss_value, accuracy_value))
+            #if step % 100 == 0:
+              #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+              #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+              #print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+              #    step, loss_value, accuracy_value))
 
           # Visualize some draws from the weights posterior.
           if False:
