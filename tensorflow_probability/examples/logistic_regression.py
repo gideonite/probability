@@ -151,6 +151,14 @@ def build_input_pipeline(x, y, batch_size):
   batch_data, batch_labels = training_iterator.get_next()
   return batch_data, batch_labels
 
+def logistic_regression(inputs):
+  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights"))
+  intercept = ed.Normal(loc=0.,scale=1., name="intercept")
+  outputs = ed.Bernoulli(
+      logits= tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
+      name="outputs")
+  return outcomes
+
 def main(argv):
   del argv  # unused
   if tf.gfile.Exists(FLAGS.model_dir):
@@ -167,89 +175,82 @@ def main(argv):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-      # Define a logistic regression model as a Bernoulli distribution
-      # parameterized by logits from a single linear layer. We use the Flipout
-      # Monte Carlo estimator for the layer: this enables lower variance
-      # stochastic gradients than naive reparameterization.
+      with tf.name_scope("ogistic_regression", values=[inputs]):
+        labels_distribution = logistic_regression(inputs)
 
-      with tf.name_scope("logistic_regression", values=[inputs]):
-        layer = tf.keras.layers.Dense(units=1, activation=None)
-        logits = layer(inputs)
-        labels_distribution = tfd.Bernoulli(logits=logits)
+      #with tf.variable_scope("current_iterate"):
+      #  loc = tf.get_variable("loc", [2],
+      #          initializer=tf.random_normal_initializer(mean=0., stddev=1.))
 
-      with tf.variable_scope("current_iterate"):
-        loc = tf.get_variable("loc", [2],
-                initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+      #  scale = tf.get_variable("scale", [2],
+      #          initializer=tf.random_normal_initializer(mean=0., stddev=1.))
 
-        scale = tf.get_variable("scale", [2],
-                initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+      #  q = tfd.Normal(loc=loc, scale=scale)
 
-        q = tfd.Normal(loc=loc, scale=scale)
+      ## Compute the -ELBO as the loss, averaged over the batch size.
+      ##neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
+      ##kl = sum(layer.losses) / FLAGS.num_examples
+      ##elbo_loss = neg_log_likelihood + kl
 
-      # Compute the -ELBO as the loss, averaged over the batch size.
-      #neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
-      #kl = sum(layer.losses) / FLAGS.num_examples
-      #elbo_loss = neg_log_likelihood + kl
+      #def p_log_prob(q_samples):
+      #  q_samples = tf.squeeze(q_samples) # TODO num_batch_draws = 1? What does this mean?
+      #  logits = tf.matmul(q_samples, tf.transpose(inputs))
+      #  bern = tfd.Independent(tfd.Bernoulli(logits=logits), name="bern")
+      #  logprobs = bern.log_prob(labels) # for each q sample
+      #  logprobs = tf.expand_dims(logprobs, 1) # mimic num_batch_draws = 1
+      #  #ret = tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
+      #  return logprobs
 
-      def p_log_prob(q_samples):
-        q_samples = tf.squeeze(q_samples) # TODO num_batch_draws = 1? What does this mean?
-        logits = tf.matmul(q_samples, tf.transpose(inputs))
-        bern = tfd.Independent(tfd.Bernoulli(logits=logits), name="bern")
-        logprobs = bern.log_prob(labels) # for each q sample
-        logprobs = tf.expand_dims(logprobs, 1) # mimic num_batch_draws = 1
-        #ret = tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
-        return logprobs
+      ## Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
+      #f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+      #num_draws = 32
+      #seed = 0
+      #klqp_vimco = tfp.vi.csiszar_vimco(
+      #    f=f,
+      #    p_log_prob=p_log_prob,
+      #    q=q,
+      #    num_draws=num_draws,
+      #    seed=seed)
 
-      # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
-      f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
-      num_draws = 32
-      seed = 0
-      klqp_vimco = tfp.vi.csiszar_vimco(
-          f=f,
-          p_log_prob=p_log_prob,
-          q=q,
-          num_draws=num_draws,
-          seed=seed)
+      ##relbo_loss = elbo_loss + tf.reduce_mean()
 
-      #relbo_loss = elbo_loss + tf.reduce_mean()
+      ## Build metrics for evaluation. Predictions are formed from a single forward
+      ## pass of the probabilistic layers. They are cheap but noisy predictions.
+      #predictions = tf.cast(logits > 0, dtype=tf.int32)
+      #accuracy, accuracy_update_op = tf.metrics.accuracy(
+      #    labels=labels, predictions=predictions)
 
-      # Build metrics for evaluation. Predictions are formed from a single forward
-      # pass of the probabilistic layers. They are cheap but noisy predictions.
-      predictions = tf.cast(logits > 0, dtype=tf.int32)
-      accuracy, accuracy_update_op = tf.metrics.accuracy(
-          labels=labels, predictions=predictions)
+      #with tf.name_scope("train"):
+      #  opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
 
-      with tf.name_scope("train"):
-        opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
+      #  #train_op = opt.minimize(elbo_loss)
+      #  train_op = opt.minimize(klqp_vimco)
+      #  with tf.Session() as sess:
+      #    sess.run(tf.global_variables_initializer())
+      #    sess.run(tf.local_variables_initializer())
 
-        #train_op = opt.minimize(elbo_loss)
-        train_op = opt.minimize(klqp_vimco)
-        with tf.Session() as sess:
-          sess.run(tf.global_variables_initializer())
-          sess.run(tf.local_variables_initializer())
+      #    # Fit the model to data.
+      #    for step in range(FLAGS.max_steps):
+      #      _ = sess.run([train_op, accuracy_update_op])
+      #      if step % 100 == 0:
+      #        print( sess.run([klqp_vimco, accuracy]) )
+      #        #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+      #        #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+      #        #print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+      #        #    step, loss_value, accuracy_value))
 
-          # Fit the model to data.
-          for step in range(FLAGS.max_steps):
-            _ = sess.run([train_op, accuracy_update_op])
-            if step % 100 == 0:
-              print( sess.run([klqp_vimco, accuracy]) )
-              #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
-              #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
-              #print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
-              #    step, loss_value, accuracy_value))
-
-          # Visualize some draws from the weights posterior.
-          if False:
-            w_draw = layer.kernel_posterior.sample()
-            b_draw = layer.bias_posterior.sample()
-            candidate_w_bs = []
-            for _ in range(FLAGS.num_monte_carlo):
-              w, b = sess.run((w_draw, b_draw))
-              candidate_w_bs.append((w, b))
-            visualize_decision(x, y, (w_true, b_true),
-                              candidate_w_bs,
-                              fname=os.path.join(FLAGS.model_dir,
-                                                  "weights_inferred.png"))
+      #    # Visualize some draws from the weights posterior.
+      #    if False:
+      #      w_draw = layer.kernel_posterior.sample()
+      #      b_draw = layer.bias_posterior.sample()
+      #      candidate_w_bs = []
+      #      for _ in range(FLAGS.num_monte_carlo):
+      #        w, b = sess.run((w_draw, b_draw))
+      #        candidate_w_bs.append((w, b))
+      #      visualize_decision(x, y, (w_true, b_true),
+      #                        candidate_w_bs,
+      #                        fname=os.path.join(FLAGS.model_dir,
+      #                                            "weights_inferred.png"))
 
 if __name__ == "__main__":
   tf.app.run()
