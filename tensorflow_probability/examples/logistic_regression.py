@@ -152,12 +152,24 @@ def build_input_pipeline(x, y, batch_size):
   return batch_data, batch_labels
 
 def logistic_regression(inputs):
-  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights"))
+  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
   intercept = ed.Normal(loc=0.,scale=1., name="intercept")
-  outputs = ed.Bernoulli(
+  labels_distribution = ed.Bernoulli(
       logits= tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
-      name="outputs")
-  return outcomes
+      name="labels_distribution")
+  labels_distribution = tf.expand_dims(labels_distribution, 1) # you say tomato, I say tomato
+  return labels_distribution
+
+def variational_posterior(n_features):
+  # TODO omitted the regular `initializer=tf.random_normal` bit.
+  qweights = ed.Normal(loc=tf.get_variable("weights_loc", [n_features]),
+                       scale=tfp.trainable_distributions.softplus_and_shift(
+                         tf.get_variable("weights_scale", [n_features])))
+
+  qintercept = ed.Normal(loc=tf.get_variable("intercept_loc", []),
+                         scale=tfp.trainable_distributions.softplus_and_shift(
+                         tf.get_variable("intercept_scale", [])))
+  return qweights, qintercept
 
 def main(argv):
   del argv  # unused
@@ -175,17 +187,24 @@ def main(argv):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-      with tf.name_scope("ogistic_regression", values=[inputs]):
+      with tf.name_scope("logistic_regression", values=[inputs]):
         labels_distribution = logistic_regression(inputs)
 
-      #with tf.variable_scope("current_iterate"):
-      #  loc = tf.get_variable("loc", [2],
-      #          initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+      with tf.variable_scope("current_iterate"):
+        n_features = 2 # TODO globalize
+        sweights, sintercept = variational_posterior(n_features)
 
-      #  scale = tf.get_variable("scale", [2],
-      #          initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+      log_joint = ed.make_log_joint_fn(logistic_regression)
+      # TODO here --- (?, 1) vs (?)
+      log_joint(inputs, weights=sweights, intercept=sintercept, labels_distribution=labels)
 
-      #  q = tfd.Normal(loc=loc, scale=scale)
+        #loc = tf.get_variable("loc", [2],
+        #        initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+
+        #scale = tf.get_variable("scale", [2],
+        #        initializer=tf.random_normal_initializer(mean=0., stddev=1.))
+
+        #q = tfd.Normal(loc=loc, scale=scale)
 
       ## Compute the -ELBO as the loss, averaged over the batch size.
       ##neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
