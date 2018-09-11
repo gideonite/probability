@@ -151,25 +151,6 @@ def build_input_pipeline(x, y, batch_size):
   batch_data, batch_labels = training_iterator.get_next()
   return batch_data, batch_labels
 
-def make_value_setter(**model_kwargs):
-  """
-  Copied from: https://github.com/tensorflow/probability/blob/master/tensorflow_probability/examples/deep_exponential_family.py#L154
-  Creates a value-setting interceptor.
-  Args:
-    **model_kwargs: dict of str to Tensor. Keys are the names of random variable
-      in the model to which this interceptor is being applied. Values are
-      Tensors to set their value to.
-  Returns:
-    set_values: Function which sets the value of intercepted ops.
-  """
-  def set_values(f, *args, **kwargs):
-    """Sets random variable values to its aligned value."""
-    name = kwargs.get("name")
-    if name in model_kwargs:
-      kwargs["value"] = model_kwargs[name]
-    return ed.interceptable(f)(*args, **kwargs)
-  return set_values
-
 def main(argv):
   del argv  # unused
   if tf.gfile.Exists(FLAGS.model_dir):
@@ -215,19 +196,19 @@ def main(argv):
         logits = tf.matmul(q_samples, tf.transpose(inputs))
         bern = tfd.Independent(tfd.Bernoulli(logits=logits), name="bern")
         logprobs = bern.log_prob(labels) # for each q sample
-        return tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
+        logprobs = tf.expand_dims(logprobs, 1) # mimic num_batch_draws = 1
+        #ret = tf.reduce_mean(logprobs)  # return the expectation over all variational posterior samples
+        return logprobs
 
       # Define the RELBO objective as a VIMCO with a specific `p.log_prob` function
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
       num_draws = 32
-      num_batch_draws = 1
       seed = 0
       klqp_vimco = tfp.vi.csiszar_vimco(
           f=f,
           p_log_prob=p_log_prob,
           q=q,
           num_draws=num_draws,
-          num_batch_draws=num_batch_draws,
           seed=seed)
 
       #relbo_loss = elbo_loss + tf.reduce_mean()
@@ -249,9 +230,9 @@ def main(argv):
 
           # Fit the model to data.
           for step in range(FLAGS.max_steps):
-            print(step)
             _ = sess.run([train_op, accuracy_update_op])
-            #if step % 100 == 0:
+            if step % 100 == 0:
+              print( sess.run([klqp_vimco, accuracy]) )
               #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
               #loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
               #print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
