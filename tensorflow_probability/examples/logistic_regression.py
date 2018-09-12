@@ -84,6 +84,7 @@ def toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0):
       (-1, 1))
   p_labels = 1. / (1 + np.exp(-logits))
   labels = np.int32(p_labels > np.random.rand(num_examples, 1))
+  labels = np.squeeze(labels) # TODO why is this necessary? Why does the old version handle this without a problem?
   return random_weights, random_bias, np.float32(design_matrix), labels
 
 
@@ -157,14 +158,18 @@ def logistic_regression(inputs):
   labels_distribution = ed.Bernoulli(
       logits= tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
       name="labels_distribution")
-  labels_distribution = tf.expand_dims(labels_distribution, 1) # you say tomato, I say tomato
   return labels_distribution
 
 def variational_posterior(n_features):
   # TODO omitted the regular `initializer=tf.random_normal` bit.
-  qweights = ed.Normal(loc=tf.get_variable("weights_loc", [n_features]),
+
+  # TODO for some reason ed.Normal does not support `sample` but this is
+  # required for computing KL-divergence. For some reason tfd.Normal does
+  # support sample. What is the difference between `ed.Normal` and
+  # `tfd.Normal`?
+  qweights = tfd.Normal(loc=tf.get_variable("weights_loc", [n_features]),
                        scale=tfp.trainable_distributions.softplus_and_shift(
-                         tf.get_variable("weights_scale", [n_features])))
+                         tf.get_variable("weights_scale", [n_features])), name="qweights")
 
   qintercept = ed.Normal(loc=tf.get_variable("intercept_loc", []),
                          scale=tfp.trainable_distributions.softplus_and_shift(
@@ -182,6 +187,15 @@ def main(argv):
   # Generate (and visualize) a toy classification dataset.
   w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
 
+  log_joint = ed.make_log_joint_fn(logistic_regression)
+  def target(weights):
+    # TODO probably need to support evaluating a number of samples of weights,
+    # not just a single weights vector. Make another function which uses this
+    # target function as part of it.
+    intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
+    target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
+    return target
+
   # Run Frank-Wolfe
   for iter in range(3):
     with tf.Graph().as_default():
@@ -194,9 +208,19 @@ def main(argv):
         n_features = 2 # TODO globalize
         sweights, sintercept = variational_posterior(n_features)
 
-      log_joint = ed.make_log_joint_fn(logistic_regression)
-      # TODO here --- (?, 1) vs (?)
-      log_joint(inputs, weights=sweights, intercept=sintercept, labels_distribution=labels)
+      with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
+
+        f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+        num_draws = 32
+        seed = 0
+        klqp_vimco = tfp.vi.csiszar_vimco(
+            f=f,
+            p_log_prob=target,
+            q=sweights,
+            num_draws=num_draws,
+            seed=seed)
 
         #loc = tf.get_variable("loc", [2],
         #        initializer=tf.random_normal_initializer(mean=0., stddev=1.))
