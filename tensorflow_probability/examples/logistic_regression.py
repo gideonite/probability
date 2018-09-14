@@ -160,6 +160,24 @@ def logistic_regression(inputs):
       name="labels_distribution")
   return labels_distribution
 
+class MyNormal(tfd.Normal):
+  def __init__(self, loc, scale):
+    super(MyNormal, self).__init__(loc, scale)
+  def log_prob(self, events):
+    log_probs = super(MyNormal, self).log_prob(events)
+    log_probs = tf.reduce_sum(log_probs, axis=2)
+    return log_probs
+
+# TODO refactor this into a unit test
+#with tf.Session() as sess:
+#  norm = tfd.Normal(loc=tf.zeros(5),scale=tf.ones(5),)
+#  samples = norm.sample([10,1]).eval()
+#  print( norm.log_prob(samples).eval() )
+#
+#  mynorm = MyNormal(loc=0.,scale=1.)
+#  print( mynorm.log_prob(samples).eval().shape )
+#  import sys; sys.exit(0)
+
 def variational_posterior(n_features):
   # TODO omitted the regular `initializer=tf.random_normal` bit.
 
@@ -167,9 +185,16 @@ def variational_posterior(n_features):
   # required for computing KL-divergence. For some reason tfd.Normal does
   # support sample. What is the difference between `ed.Normal` and
   # `tfd.Normal`?
-  qweights = tfd.Normal(loc=tf.get_variable("weights_loc", [n_features]),
-                       scale=tfp.trainable_distributions.softplus_and_shift(
-                         tf.get_variable("weights_scale", [n_features])), name="qweights")
+  #qweights = tfd.Normal(loc=tf.get_variable("weights_loc", [n_features]),
+  #                      scale=tfp.trainable_distributions.softplus_and_shift(
+  #                        tf.get_variable("weights_scale", [n_features])),
+  #                      name="qweights")
+
+  qweights = MyNormal(loc=tf.get_variable("weights_loc", [n_features]),
+                        scale=tfp.trainable_distributions.softplus_and_shift(
+                          tf.get_variable("weights_scale", [n_features])),
+                        #name="qweights" # TODO figure out this name stuff)
+                        )
 
   qintercept = ed.Normal(loc=tf.get_variable("intercept_loc", []),
                          scale=tfp.trainable_distributions.softplus_and_shift(
@@ -196,6 +221,12 @@ def main(argv):
     target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
     return target
 
+  def foo(qsamples):
+    '''
+    qsamples is assumed to be [num_draws x 1 x n_features]
+    '''
+    return tf.map_fn(target, tf.squeeze(qsamples))
+
   # Run Frank-Wolfe
   for iter in range(3):
     with tf.Graph().as_default():
@@ -217,7 +248,7 @@ def main(argv):
         seed = 0
         klqp_vimco = tfp.vi.csiszar_vimco(
             f=f,
-            p_log_prob=target,
+            p_log_prob=foo,
             q=sweights,
             num_draws=num_draws,
             seed=seed)
