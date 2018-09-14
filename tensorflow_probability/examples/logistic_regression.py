@@ -156,7 +156,7 @@ def logistic_regression(inputs):
   weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
   intercept = ed.Normal(loc=0.,scale=1., name="intercept")
   labels_distribution = ed.Bernoulli(
-      logits= tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
+      logits = tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
       name="labels_distribution")
   return labels_distribution
 
@@ -228,7 +228,7 @@ def main(argv):
     return tf.map_fn(target, tf.squeeze(qsamples))
 
   # Run Frank-Wolfe
-  for iter in range(3):
+  for iter in range(1):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
@@ -239,19 +239,39 @@ def main(argv):
         n_features = 2 # TODO globalize
         sweights, sintercept = variational_posterior(n_features)
 
-      with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        sess.run(tf.local_variables_initializer())
+      f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+      num_draws = 32
+      seed = 0
+      klqp_vimco = tfp.vi.csiszar_vimco(
+          f=f,
+          p_log_prob=foo,
+          q=sweights,
+          num_draws=num_draws,
+          seed=seed)
 
-        f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
-        num_draws = 32
-        seed = 0
-        klqp_vimco = tfp.vi.csiszar_vimco(
-            f=f,
-            p_log_prob=foo,
-            q=sweights,
-            num_draws=num_draws,
-            seed=seed)
+      sweights_prime = ed.Normal(loc=sweights.loc, scale=sweights.scale) # TODO casting shouldn't be necessary
+      logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
+      predictions = tf.cast(logits > 0, dtype=tf.int32)
+      accuracy, accuracy_update_op = tf.metrics.accuracy(
+          labels=labels, predictions=predictions)
+
+      with tf.name_scope("train"):
+        opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
+        train_op = opt.minimize(klqp_vimco)
+
+        with tf.Session() as sess:
+          sess.run(tf.global_variables_initializer())
+          sess.run(tf.local_variables_initializer())
+          #_ = sess.run([train_op, accuracy_update_op])
+          for step in range(FLAGS.max_steps):
+            #_ = sess.run([train_op])
+            if step % 100 == 0:
+              print(step)
+              print("====")
+              print( sess.run([train_op, klqp_vimco, accuracy]) )
+              print( sess.run([train_op, klqp_vimco, accuracy]) )
+              print( sess.run([train_op, klqp_vimco, accuracy]) )
+              print( sess.run([train_op, klqp_vimco, accuracy]) )
 
         #loc = tf.get_variable("loc", [2],
         #        initializer=tf.random_normal_initializer(mean=0., stddev=1.))
