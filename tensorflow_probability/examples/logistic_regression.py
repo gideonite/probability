@@ -255,10 +255,6 @@ def main(argv):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-      #TODO I guess I don't need this anymore?
-      #with tf.name_scope("logistic_regression", values=[inputs]):
-      #  labels_distribution = logistic_regression(inputs)
-
       with tf.variable_scope("current_iterate"):
         #n_features = 2 # TODO globalize
         #sweights, sintercept = variational_posterior(n_features)
