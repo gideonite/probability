@@ -22,14 +22,12 @@ import os
 
 # Dependency imports
 from absl import flags
-import matplotlib.colors
 from matplotlib import cm
 from matplotlib import figure
 from matplotlib.backends import backend_agg
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
-from tensorflow_probability import edward2 as ed
 
 tfd = tfp.distributions
 
@@ -53,7 +51,9 @@ flags.DEFINE_integer("num_examples",
 flags.DEFINE_integer("num_monte_carlo",
                      default=50,
                      help="Monte Carlo samples to visualize weight posterior.")
+
 FLAGS = flags.FLAGS
+
 
 def toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0):
   """Generates synthetic data for binary classification.
@@ -83,18 +83,7 @@ def toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0):
       (-1, 1))
   p_labels = 1. / (1 + np.exp(-logits))
   labels = np.int32(p_labels > np.random.rand(num_examples, 1))
-  labels = np.squeeze(labels) # TODO why is this necessary? Why does the old version handle this without a problem?
   return random_weights, random_bias, np.float32(design_matrix), labels
-
-def toy_logistic_data_with_ones_col(num_examples, input_size=2, weights_prior_stddev=5.0):
-  '''Put the bias into the weights trick by adding a col of 1s.'''
-  weights, bias, design_matrix, labels \
-      = toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0)
-
-  weights = np.append(weights, bias)
-  design_matrix = np.c_[design_matrix, np.ones(design_matrix.shape[0])]
-
-  return weights, np.float32(design_matrix), labels
 
 
 def visualize_decision(inputs, labels, true_w_b, candidate_w_bs, fname):
@@ -115,8 +104,8 @@ def visualize_decision(inputs, labels, true_w_b, candidate_w_bs, fname):
   canvas = backend_agg.FigureCanvasAgg(fig)
   ax = fig.add_subplot(1, 1, 1)
   ax.scatter(inputs[:, 0], inputs[:, 1],
-             c=np.float32(labels),
-             cmap=matplotlib.colors.ListedColormap(['r','b']))
+             c=np.float32(labels[:, 0]),
+             cmap=cm.get_cmap("binary"))
 
   def plot_weights(w, b, **kwargs):
     w1, w2 = w
@@ -161,61 +150,6 @@ def build_input_pipeline(x, y, batch_size):
   batch_data, batch_labels = training_iterator.get_next()
   return batch_data, batch_labels
 
-def logistic_regression(inputs):
-  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
-  intercept = ed.Normal(loc=0.,scale=1., name="intercept")
-  labels_distribution = ed.Bernoulli(
-      logits = tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
-      name="labels_distribution")
-  return labels_distribution
-
-def logistic_regression_with_ones_col(inputs):
-  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
-  labels_distribution = ed.Bernoulli(
-      logits = tf.tensordot(inputs, weights, [[1], [0]]),
-      name="labels_distribution")
-  return labels_distribution
-
-class MyNormal(tfd.Normal):
-  def __init__(self, loc, scale):
-    super(MyNormal, self).__init__(loc, scale)
-  def log_prob(self, events):
-    log_probs = super(MyNormal, self).log_prob(events)
-    log_probs = tf.reduce_sum(log_probs, axis=2)
-    return log_probs
-
-# TODO refactor this into a unit test
-#with tf.Session() as sess:
-#  norm = tfd.Normal(loc=tf.zeros(5),scale=tf.ones(5),)
-#  samples = norm.sample([10,1]).eval()
-#  print( norm.log_prob(samples).eval() )
-#
-#  mynorm = MyNormal(loc=0.,scale=1.)
-#  print( mynorm.log_prob(samples).eval().shape )
-#  import sys; sys.exit(0)
-
-def variational_posterior(n_features):
-  # TODO omitted the regular `initializer=tf.random_normal` bit.
-
-  # TODO for some reason ed.Normal does not support `sample` but this is
-  # required for computing KL-divergence. For some reason tfd.Normal does
-  # support log_prob (?). What is the difference between `ed.Normal` and
-  # `tfd.Normal`?
-  #qweights = tfd.Normal(loc=tf.get_variable("weights_loc", [n_features]),
-  #                      scale=tfp.trainable_distributions.softplus_and_shift(
-  #                        tf.get_variable("weights_scale", [n_features])),
-  #                      name="qweights")
-
-  qweights = MyNormal(loc=tf.get_variable("qweights/loc", [n_features]),
-                        scale=tfp.trainable_distributions.softplus_and_shift(
-                          tf.get_variable("qweights/scale", [n_features])),
-                        #name="qweights" # TODO figure out this name stuff)
-                        )
-
-  qintercept = ed.Normal(loc=tf.get_variable("qintercept/loc", []),
-                         scale=tfp.trainable_distributions.softplus_and_shift(
-                         tf.get_variable("qintercept/scale", [])))
-  return qweights, qintercept
 
 def main(argv):
   del argv  # unused
@@ -226,87 +160,62 @@ def main(argv):
   tf.gfile.MakeDirs(FLAGS.model_dir)
 
   # Generate (and visualize) a toy classification dataset.
-  #w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
-  w_true, x, y = toy_logistic_data_with_ones_col(FLAGS.num_examples, 2)
+  w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
 
-  b_true = w_true[-1]
-  #visualize_decision(x, y, (w_true, b_true),
-  visualize_decision(x, y, (w_true[:-1], b_true),
-                     [],
-                     fname=os.path.join(FLAGS.model_dir,
-                       "weights_inferred.png"))
+  with tf.Graph().as_default():
+    inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-  #log_joint = ed.make_log_joint_fn(logistic_regression)
-  log_joint = ed.make_log_joint_fn(logistic_regression_with_ones_col)
-  def target(weights):
-    '''closure over observations, computes p(observations, `weights`).'''
-    #intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
-    #target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
-    ret = log_joint(inputs=inputs, weights=weights, labels_distribution=labels)
-    return ret
+    # Define a logistic regression model as a Bernoulli distribution
+    # parameterized by logits from a single linear layer. We use the Flipout
+    # Monte Carlo estimator for the layer: this enables lower variance
+    # stochastic gradients than naive reparameterization.
+    with tf.name_scope("logistic_regression", values=[inputs]):
+      layer = tfp.layers.DenseFlipout(
+          units=1,
+          activation=None,
+          kernel_posterior_fn=tfp.layers.default_mean_field_normal_fn(),
+          bias_posterior_fn=tfp.layers.default_mean_field_normal_fn())
+      logits = layer(inputs)
+      labels_distribution = tfd.Bernoulli(logits=logits)
 
-  def p_log_prob(qsamples):
-    '''qsamples is assumed to be [num_draws x 1 x n_features]'''
-    return tf.map_fn(target, tf.squeeze(qsamples))
+    # Compute the -ELBO as the loss, averaged over the batch size.
+    neg_log_likelihood = -tf.reduce_mean(labels_distribution.log_prob(labels))
+    kl = sum(layer.losses) / FLAGS.num_examples
+    elbo_loss = neg_log_likelihood + kl
 
-  # Run Frank-Wolfe
-  n_fw_iter = 1
-  for iter in range(n_fw_iter):
-    with tf.Graph().as_default():
-      inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
+    # Build metrics for evaluation. Predictions are formed from a single forward
+    # pass of the probabilistic layers. They are cheap but noisy predictions.
+    predictions = tf.cast(logits > 0, dtype=tf.int32)
+    accuracy, accuracy_update_op = tf.metrics.accuracy(
+        labels=labels, predictions=predictions)
 
-      with tf.variable_scope("current_iterate"):
-        #n_features = 2 # TODO globalize
-        #sweights, sintercept = variational_posterior(n_features)
-        n_features = 3 # TODO globalize
-        sweights, _ = variational_posterior(n_features)
+    with tf.name_scope("train"):
+      opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
 
-      f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
-      num_draws = 32
-      seed = 0
-      klqp_vimco = tfp.vi.csiszar_vimco(
-          f=f,
-          p_log_prob=p_log_prob,
-          q=sweights,
-          num_draws=num_draws,
-          seed=seed)
+      train_op = opt.minimize(elbo_loss)
+      with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        sess.run(tf.local_variables_initializer())
 
-      sweights_prime = ed.as_random_variable(sweights) # TODO for some reason multiplication fails.
-      logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
-      predictions = tf.cast(logits > 0, dtype=tf.int32)
-      accuracy, accuracy_update_op = tf.metrics.accuracy(
-          labels=labels, predictions=predictions)
+        # Fit the model to data.
+        for step in range(FLAGS.max_steps):
+          _ = sess.run([train_op, accuracy_update_op])
+          if step % 100 == 0:
+            loss_value, accuracy_value = sess.run([elbo_loss, accuracy])
+            print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+                step, loss_value, accuracy_value))
 
-      with tf.name_scope("train"):
-        opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
-        train_op = opt.minimize(klqp_vimco)
-
-        with tf.Session() as sess:
-          sess.run(tf.global_variables_initializer())
-          sess.run(tf.local_variables_initializer())
-          #_ = sess.run([train_op, accuracy_update_op])
-          for step in range(FLAGS.max_steps):
-            _ = sess.run([train_op, accuracy_update_op])
-            if step % 100 == 0:
-              klqp, acc = sess.run([klqp_vimco, accuracy])
-              print("step: %d, klqp: %.2f, accuracy: %.2f" % (step, klqp, acc))
-              print("sweights loc", sweights.loc.eval())
-              print("sweights scale", sweights.scale.eval())
-
-              w_draw = sweights.sample()
-              #b_draw = 0
-              candidate_w_bs = []
-              for _ in range(FLAGS.num_monte_carlo):
-                #w, b = sess.run((w_draw, b_draw))
-                w = sess.run((w_draw))
-                b = w[-1]
-                candidate_w_bs.append((w[:-1], b))
-
-              #visualize_decision(x, y, (w_true, b_true),
-              visualize_decision(x, y, (w_true[:-1], b_true),
-                  candidate_w_bs,
-                  fname=os.path.join(FLAGS.model_dir,
-                    "weights_inferred.png"))
+        # Visualize some draws from the weights posterior.
+        w_draw = layer.kernel_posterior.sample()
+        b_draw = layer.bias_posterior.sample()
+        candidate_w_bs = []
+        for _ in range(FLAGS.num_monte_carlo):
+          w, b = sess.run((w_draw, b_draw))
+          candidate_w_bs.append((w, b))
+        visualize_decision(x, y, (w_true, b_true),
+                           candidate_w_bs,
+                           fname=os.path.join(FLAGS.model_dir,
+                                              "weights_inferred.png"))
 
 if __name__ == "__main__":
   tf.app.run()
