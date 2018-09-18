@@ -22,6 +22,7 @@ import os
 
 # Dependency imports
 from absl import flags
+import matplotlib.colors
 from matplotlib import cm
 from matplotlib import figure
 from matplotlib.backends import backend_agg
@@ -52,9 +53,11 @@ flags.DEFINE_integer("num_examples",
 flags.DEFINE_integer("num_monte_carlo",
                      default=50,
                      help="Monte Carlo samples to visualize weight posterior.")
+flags.DEFINE_boolean("sanity",
+                     default=False,
+                     help="Run with sanity checks and plots")
 
 FLAGS = flags.FLAGS
-
 
 def toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0):
   """Generates synthetic data for binary classification.
@@ -106,8 +109,8 @@ def visualize_decision(inputs, labels, true_w_b, candidate_w_bs, fname):
   canvas = backend_agg.FigureCanvasAgg(fig)
   ax = fig.add_subplot(1, 1, 1)
   ax.scatter(inputs[:, 0], inputs[:, 1],
-             c=np.float32(labels[:, 0]),
-             cmap=cm.get_cmap("binary"))
+             c=np.float32(labels),
+             cmap=matplotlib.colors.ListedColormap(['r','b']))
 
   def plot_weights(w, b, **kwargs):
     w1, w2 = w
@@ -212,23 +215,28 @@ def main(argv):
   # Generate (and visualize) a toy classification dataset.
   w_true, b_true, x, y = toy_logistic_data(FLAGS.num_examples, 2)
 
+  visualize_decision(x, y, (w_true, b_true),
+                     [],
+                     fname=os.path.join(FLAGS.model_dir,
+                       "weights_inferred.png"))
+
+  if FLAGS.sanity:
+    pass
+
   log_joint = ed.make_log_joint_fn(logistic_regression)
   def target(weights):
-    # TODO probably need to support evaluating a number of samples of weights,
-    # not just a single weights vector. Make another function which uses this
-    # target function as part of it.
+    '''closure over observations, computes p(observations, `weights`).'''
     intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
     target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
     return target
 
-  def foo(qsamples):
-    '''
-    qsamples is assumed to be [num_draws x 1 x n_features]
-    '''
+  def p_log_prob(qsamples):
+    '''qsamples is assumed to be [num_draws x 1 x n_features]'''
     return tf.map_fn(target, tf.squeeze(qsamples))
 
   # Run Frank-Wolfe
-  for iter in range(1):
+  n_fw_iter = 1
+  for iter in range(n_fw_iter):
     with tf.Graph().as_default():
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
@@ -244,7 +252,7 @@ def main(argv):
       seed = 0
       klqp_vimco = tfp.vi.csiszar_vimco(
           f=f,
-          p_log_prob=foo,
+          p_log_prob=p_log_prob,
           q=sweights,
           num_draws=num_draws,
           seed=seed)
@@ -264,14 +272,10 @@ def main(argv):
           sess.run(tf.local_variables_initializer())
           #_ = sess.run([train_op, accuracy_update_op])
           for step in range(FLAGS.max_steps):
-            #_ = sess.run([train_op])
+            _ = sess.run([train_op, accuracy_update_op])
             if step % 100 == 0:
-              print(step)
-              print("====")
-              print( sess.run([train_op, klqp_vimco, accuracy]) )
-              print( sess.run([train_op, klqp_vimco, accuracy]) )
-              print( sess.run([train_op, klqp_vimco, accuracy]) )
-              print( sess.run([train_op, klqp_vimco, accuracy]) )
+              klqp, acc = sess.run([klqp_vimco, accuracy])
+              print("klqp: %.2f, accuracy: %.2f" % (klqp, acc))
 
         #loc = tf.get_variable("loc", [2],
         #        initializer=tf.random_normal_initializer(mean=0., stddev=1.))
