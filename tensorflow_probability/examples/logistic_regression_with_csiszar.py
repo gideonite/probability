@@ -53,6 +53,9 @@ flags.DEFINE_integer("num_examples",
 flags.DEFINE_integer("num_monte_carlo",
                      default=50,
                      help="Monte Carlo samples to visualize weight posterior.")
+flags.DEFINE_integer("seed",
+                     default=0,
+                     help="Set the random seed for this run")
 FLAGS = flags.FLAGS
 
 def toy_logistic_data(num_examples, input_size=2, weights_prior_stddev=5.0):
@@ -219,6 +222,10 @@ def variational_posterior(n_features):
 
 def main(argv):
   del argv  # unused
+
+  tf.set_random_seed(FLAGS.seed)
+  np.random.seed(FLAGS.seed)
+
   if tf.gfile.Exists(FLAGS.model_dir):
     tf.logging.warning(
         "Warning: deleting old log directory at {}".format(FLAGS.model_dir))
@@ -242,7 +249,7 @@ def main(argv):
     '''closure over observations, computes p(observations, `weights`).'''
     #intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
     #target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
-    ret = log_joint(inputs=inputs, weights=weights, labels_distribution=labels)
+    ret = log_joint(inputs=x, weights=weights, labels_distribution=y)
     return ret
 
   def p_log_prob(qsamples):
@@ -253,6 +260,8 @@ def main(argv):
   n_fw_iter = 1
   for iter in range(n_fw_iter):
     with tf.Graph().as_default():
+      tf.set_random_seed(FLAGS.seed)
+      np.random.seed(FLAGS.seed)
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
       with tf.variable_scope("current_iterate"):
@@ -284,29 +293,26 @@ def main(argv):
         with tf.Session() as sess:
           sess.run(tf.global_variables_initializer())
           sess.run(tf.local_variables_initializer())
-          #_ = sess.run([train_op, accuracy_update_op])
           for step in range(FLAGS.max_steps):
             _ = sess.run([train_op, accuracy_update_op])
             if step % 100 == 0:
               klqp, acc = sess.run([klqp_vimco, accuracy])
               print("step: %d, klqp: %.2f, accuracy: %.2f" % (step, klqp, acc))
-              print("sweights loc", sweights.loc.eval())
-              print("sweights scale", sweights.scale.eval())
 
-              w_draw = sweights.sample()
-              #b_draw = 0
-              candidate_w_bs = []
-              for _ in range(FLAGS.num_monte_carlo):
-                #w, b = sess.run((w_draw, b_draw))
-                w = sess.run((w_draw))
-                b = w[-1]
-                candidate_w_bs.append((w[:-1], b))
+          w_draw = sweights.sample()
+          #b_draw = 0
+          candidate_w_bs = []
+          for _ in range(FLAGS.num_monte_carlo):
+            #w, b = sess.run((w_draw, b_draw))
+            w = sess.run((w_draw))
+            b = w[-1]
+            candidate_w_bs.append((w[:-1], b))
 
-              #visualize_decision(x, y, (w_true, b_true),
-              visualize_decision(x, y, (w_true[:-1], b_true),
-                  candidate_w_bs,
-                  fname=os.path.join(FLAGS.model_dir,
-                    "weights_inferred.png"))
+          #visualize_decision(x, y, (w_true, b_true),
+          visualize_decision(x, y, (w_true[:-1], b_true),
+              candidate_w_bs,
+              fname=os.path.join(FLAGS.model_dir,
+                "weights_inferred.png"))
 
 if __name__ == "__main__":
   tf.app.run()
