@@ -161,15 +161,15 @@ def build_input_pipeline(x, y, batch_size):
   batch_data, batch_labels = training_iterator.get_next()
   return batch_data, batch_labels
 
-#def logistic_regression(inputs):
-#  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
-#  intercept = ed.Normal(loc=0.,scale=1., name="intercept")
-#  labels_distribution = ed.Bernoulli(
-#      logits = tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
-#      name="labels_distribution")
-#  return labels_distribution
-
 def logistic_regression(inputs):
+  weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
+  intercept = ed.Normal(loc=0.,scale=1., name="intercept")
+  labels_distribution = ed.Bernoulli(
+      logits = tf.tensordot(inputs, weights, [[1], [0]]) + intercept,
+      name="labels_distribution")
+  return labels_distribution
+
+def logistic_regression_with_ones_col(inputs):
   weights = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1., name="weights")
   labels_distribution = ed.Bernoulli(
       logits = tf.tensordot(inputs, weights, [[1], [0]]),
@@ -199,7 +199,7 @@ def variational_posterior(n_features):
 
   # TODO for some reason ed.Normal does not support `sample` but this is
   # required for computing KL-divergence. For some reason tfd.Normal does
-  # support sample. What is the difference between `ed.Normal` and
+  # support log_prob (?). What is the difference between `ed.Normal` and
   # `tfd.Normal`?
   #qweights = tfd.Normal(loc=tf.get_variable("weights_loc", [n_features]),
   #                      scale=tfp.trainable_distributions.softplus_and_shift(
@@ -236,7 +236,8 @@ def main(argv):
                      fname=os.path.join(FLAGS.model_dir,
                        "weights_inferred.png"))
 
-  log_joint = ed.make_log_joint_fn(logistic_regression)
+  #log_joint = ed.make_log_joint_fn(logistic_regression)
+  log_joint = ed.make_log_joint_fn(logistic_regression_with_ones_col)
   def target(weights):
     '''closure over observations, computes p(observations, `weights`).'''
     #intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
