@@ -264,11 +264,16 @@ def main(argv):
       np.random.seed(FLAGS.seed)
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
+
       with tf.variable_scope("current_iterate"):
         #n_features = 2 # TODO globalize
         #sweights, sintercept = variational_posterior(n_features)
         n_features = 3 # TODO globalize
         sweights, _ = variational_posterior(n_features)
+
+      sweights_samples =  sweights.sample(100)
+      lik = tf.reduce_mean(p_log_prob(sweights_samples))
+      kl = tfd.kl_divergence(sweights, prior)
 
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
       num_draws = 32
@@ -297,7 +302,8 @@ def main(argv):
             _ = sess.run([train_op, accuracy_update_op])
             if step % 100 == 0:
               klqp, acc = sess.run([klqp_vimco, accuracy])
-              print("step: %d, klqp: %.2f, accuracy: %.2f" % (step, klqp, acc))
+              print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+                  step, klqp, acc))
 
           w_draw = sweights.sample()
           #b_draw = 0
