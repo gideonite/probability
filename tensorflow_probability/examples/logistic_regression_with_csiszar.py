@@ -246,31 +246,45 @@ def main(argv):
       np.random.seed(FLAGS.seed)
       inputs, labels = build_input_pipeline(x, y, FLAGS.batch_size)
 
-
       with tf.variable_scope("current_iterate"):
         #n_features = 2 # TODO globalize
         #sweights, sintercept = variational_posterior(n_features)
         n_features = 3 # TODO globalize
         sweights, _ = variational_posterior(n_features)
 
-      sweights_samples =  sweights.sample(2)
-      # TODO to get the same order of magnitude, divide by num_samples, but is
-      # this correct? Ultimately, It doesn't matter.
-      neg_log_likelihood = -tf.reduce_mean(p_log_prob(sweights_samples)) / FLAGS.num_examples
-      prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
-      kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution,
-                         prior.distribution)) / FLAGS.num_examples
-      elbo_loss = neg_log_likelihood + kl
+      train_with_vimco = True
+      if not train_with_vimco: # then train with elbo = -loglik + kl
+        sweights_samples =  sweights.sample(2)
+        # TODO to get the same order of magnitude, divide by num_samples, but is
+        # this correct? Ultimately, It doesn't matter.
+        neg_log_likelihood = -tf.reduce_mean(p_log_prob(sweights_samples)) / FLAGS.num_examples
+        prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
+        kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution,
+                          prior.distribution)) / FLAGS.num_examples
+        elbo_loss = neg_log_likelihood + kl
+        loss = elbo_loss
+      else:
+        f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+        num_draws = 32
+        seed = 0
+        klqp_vimco = tfp.vi.csiszar_vimco(
+            f=f,
+            p_log_prob=p_log_prob,
+            q=sweights,
+            num_draws=num_draws,
+            seed=seed)
+        loss = klqp_vimco
 
+      # TODO shouldn't need to redefine this in order to get predictions.
       sweights_prime = ed.as_random_variable(sweights) # TODO for some reason multiplication fails.
-      logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
+      logits = tf.tensordot(inputs, sweights_prime, [[1], [0]])
       predictions = tf.cast(logits > 0, dtype=tf.int32)
       accuracy, accuracy_update_op = tf.metrics.accuracy(
           labels=labels, predictions=predictions)
 
       with tf.name_scope("train"):
         opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
-        train_op = opt.minimize(elbo_loss)
+        train_op = opt.minimize(loss)
 
         with tf.Session() as sess:
           sess.run(tf.global_variables_initializer())
@@ -278,7 +292,7 @@ def main(argv):
           for step in range(FLAGS.max_steps):
             sess.run([train_op, accuracy_update_op])
             if step % 100 == 0:
-              print("step {:>3d}, loss {:.3f}, accuracy: {:.3f}".format(step, *sess.run([elbo_loss, accuracy])))
+              print("step {:>3d}, loss {:.3f}, accuracy: {:.3f}".format(step, *sess.run([loss, accuracy])))
 
           w_draw = sweights.sample()
           #b_draw = 0
