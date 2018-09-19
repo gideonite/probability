@@ -229,8 +229,9 @@ def main(argv):
   def target(weights):
     '''closure over observations, computes p(observations, `weights`).'''
     #intercept = ed.Normal(loc=tf.constant(0.), scale=tf.constant(1.))
-    #target = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
-    ret = log_joint(inputs=x, weights=weights, labels_distribution=y)
+    #ret = log_joint(inputs=inputs, weights=weights, intercept=intercept, labels_distribution=labels)
+    #ret = log_joint(inputs=x, weights=weights, labels_distribution=y)
+    ret = log_joint(inputs=inputs, weights=weights, labels_distribution=labels)
     return ret
 
   def p_log_prob(qsamples):
@@ -252,11 +253,14 @@ def main(argv):
         n_features = 3 # TODO globalize
         sweights, _ = variational_posterior(n_features)
 
-      sweights_samples =  sweights.sample(100)
-      lik = tf.reduce_mean(p_log_prob(sweights_samples))
+      sweights_samples =  sweights.sample(2)
+      # TODO to get the same order of magnitude, divide by num_samples, but is
+      # this correct? Ultimately, It doesn't matter.
+      neg_log_likelihood = -tf.reduce_mean(p_log_prob(sweights_samples)) / FLAGS.num_examples
       prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
-      kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution, prior.distribution))
-      elbo_loss = -(lik - kl)
+      kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution,
+                         prior.distribution)) / FLAGS.num_examples
+      elbo_loss = neg_log_likelihood + kl
 
       sweights_prime = ed.as_random_variable(sweights) # TODO for some reason multiplication fails.
       logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
