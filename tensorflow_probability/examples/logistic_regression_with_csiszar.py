@@ -255,10 +255,6 @@ def main(argv):
       sweights_samples =  sweights.sample(100)
       lik = tf.reduce_mean(p_log_prob(sweights_samples))
       prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
-      # TODO Should kl(tf.Independent || b) default to kl(wrapped dist || b) ? That would certainly make things easier.
-      #kl = 1/2. * tf.reduce_sum(tf.square(sweights.distribution.loc)
-      #                          + tf.square(sweights.distribution.scale)
-      #                          - tf.log(tf.square(sweights.distribution.scale)) - 1)
       kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution, prior.distribution))
       elbo_loss = -(lik - kl)
 
