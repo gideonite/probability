@@ -255,17 +255,12 @@ def main(argv):
       sweights_samples =  sweights.sample(100)
       lik = tf.reduce_mean(p_log_prob(sweights_samples))
       prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
-      kl = tfd.kl_divergence(sweights, prior)
-
-      f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
-      num_draws = 32
-      seed = 0
-      klqp_vimco = tfp.vi.csiszar_vimco(
-          f=f,
-          p_log_prob=p_log_prob,
-          q=sweights,
-          num_draws=num_draws,
-          seed=seed)
+      # TODO Should kl(tf.Independent || b) default to kl(wrapped dist || b) ? That would certainly make things easier.
+      #kl = 1/2. * tf.reduce_sum(tf.square(sweights.distribution.loc)
+      #                          + tf.square(sweights.distribution.scale)
+      #                          - tf.log(tf.square(sweights.distribution.scale)) - 1)
+      kl = tf.reduce_sum(tfd.kl_divergence(sweights.distribution, prior.distribution))
+      elbo_loss = -(lik - kl)
 
       sweights_prime = ed.as_random_variable(sweights) # TODO for some reason multiplication fails.
       logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
@@ -275,17 +270,15 @@ def main(argv):
 
       with tf.name_scope("train"):
         opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
-        train_op = opt.minimize(klqp_vimco)
+        train_op = opt.minimize(elbo_loss)
 
         with tf.Session() as sess:
           sess.run(tf.global_variables_initializer())
           sess.run(tf.local_variables_initializer())
           for step in range(FLAGS.max_steps):
-            _ = sess.run([train_op, accuracy_update_op])
+            sess.run([train_op, accuracy_update_op])
             if step % 100 == 0:
-              klqp, acc = sess.run([klqp_vimco, accuracy])
-              print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
-                  step, klqp, acc))
+              print("step {:>3d}, loss {:.3f}, accuracy: {:.3f}".format(step, *sess.run([elbo_loss, accuracy])))
 
           w_draw = sweights.sample()
           #b_draw = 0
@@ -301,6 +294,51 @@ def main(argv):
               candidate_w_bs,
               fname=os.path.join(FLAGS.model_dir,
                 "weights_inferred.png"))
+
+      #f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
+      #num_draws = 32
+      #seed = 0
+      #klqp_vimco = tfp.vi.csiszar_vimco(
+      #    f=f,
+      #    p_log_prob=p_log_prob,
+      #    q=sweights,
+      #    num_draws=num_draws,
+      #    seed=seed)
+
+      #sweights_prime = ed.as_random_variable(sweights) # TODO for some reason multiplication fails.
+      #logits = tf.tensordot(inputs, sweights_prime, [[1], [0]]) # TODO shouldn't need to redefine this
+      #predictions = tf.cast(logits > 0, dtype=tf.int32)
+      #accuracy, accuracy_update_op = tf.metrics.accuracy(
+      #    labels=labels, predictions=predictions)
+
+      #with tf.name_scope("train"):
+      #  opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
+      #  train_op = opt.minimize(klqp_vimco)
+
+      #  with tf.Session() as sess:
+      #    sess.run(tf.global_variables_initializer())
+      #    sess.run(tf.local_variables_initializer())
+      #    for step in range(FLAGS.max_steps):
+      #      _ = sess.run([train_op, accuracy_update_op])
+      #      if step % 100 == 0:
+      #        klqp, acc = sess.run([klqp_vimco, accuracy])
+      #        print("Step: {:>3d} Loss: {:.3f} Accuracy: {:.3f}".format(
+      #            step, klqp, acc))
+
+      #    w_draw = sweights.sample()
+      #    #b_draw = 0
+      #    candidate_w_bs = []
+      #    for _ in range(FLAGS.num_monte_carlo):
+      #      #w, b = sess.run((w_draw, b_draw))
+      #      w = sess.run((w_draw))
+      #      b = w[-1]
+      #      candidate_w_bs.append((w[:-1], b))
+
+      #    #visualize_decision(x, y, (w_true, b_true),
+      #    visualize_decision(x, y, (w_true[:-1], b_true),
+      #        candidate_w_bs,
+      #        fname=os.path.join(FLAGS.model_dir,
+      #          "weights_inferred.png"))
 
 if __name__ == "__main__":
   tf.app.run()
