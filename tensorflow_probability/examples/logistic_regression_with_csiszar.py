@@ -179,24 +179,6 @@ def logistic_regression_with_ones_col(inputs):
       name="labels_distribution")
   return labels_distribution
 
-class MyNormal(tfd.Normal):
-  def __init__(self, loc, scale):
-    super(MyNormal, self).__init__(loc, scale)
-  def log_prob(self, events):
-    log_probs = super(MyNormal, self).log_prob(events)
-    log_probs = tf.reduce_sum(log_probs, axis=2)
-    return log_probs
-
-# TODO refactor this into a unit test
-#with tf.Session() as sess:
-#  norm = tfd.Normal(loc=tf.zeros(5),scale=tf.ones(5),)
-#  samples = norm.sample([10,1]).eval()
-#  print( norm.log_prob(samples).eval() )
-#
-#  mynorm = MyNormal(loc=0.,scale=1.)
-#  print( mynorm.log_prob(samples).eval().shape )
-#  import sys; sys.exit(0)
-
 def variational_posterior(n_features):
   # TODO omitted the regular `initializer=tf.random_normal` bit.
 
@@ -209,11 +191,10 @@ def variational_posterior(n_features):
   #                        tf.get_variable("weights_scale", [n_features])),
   #                      name="qweights")
 
-  qweights = MyNormal(loc=tf.get_variable("qweights/loc", [n_features]),
-                        scale=tfp.trainable_distributions.softplus_and_shift(
-                          tf.get_variable("qweights/scale", [n_features])),
-                        #name="qweights" # TODO figure out this name stuff)
-                        )
+  qweights = tfd.Independent(tfd.Normal(loc=tf.get_variable("fooqweights/loc", [n_features]),
+                                        scale=tfp.trainable_distributions.softplus_and_shift(
+                                          tf.get_variable("fooqweights/scale", [n_features])),
+                                        name="qweights"), reinterpreted_batch_ndims=1)
 
   qintercept = ed.Normal(loc=tf.get_variable("qintercept/loc", []),
                          scale=tfp.trainable_distributions.softplus_and_shift(
@@ -273,6 +254,7 @@ def main(argv):
 
       sweights_samples =  sweights.sample(100)
       lik = tf.reduce_mean(p_log_prob(sweights_samples))
+      prior = ed.Normal(loc=tf.zeros(inputs.shape[1]), scale=1.)
       kl = tfd.kl_divergence(sweights, prior)
 
       f = lambda logu: tfp.vi.kl_reverse(logu, self_normalized=False)
